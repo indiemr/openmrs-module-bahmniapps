@@ -2,9 +2,7 @@ name: Build and Publish
 on:
   push:
     branches:
-      - master
-      - 'release-*'
-      - 'experiment/custom-configuration-on-tag-1.0.0-lite'
+      - 'experiment/**'
     tags:
       - '[0-9]+.[0-9]+.[0-9]+'
 
