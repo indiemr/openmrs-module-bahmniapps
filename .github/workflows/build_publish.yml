@@ -51,7 +51,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           file: package/docker/Dockerfile
           push: true
-          tags: indiclinic/bahmni-web:latest
+          tags: indiclinic/bahmni-web:${{ env.ARTIFACT_VERSION }}, indiclinic/bahmni-web:latest
       # - name: Update Version and Image Tag
       #   run: |
       #     yq --inplace '.image.tag = "${{ env.ARTIFACT_VERSION }}"' $HELM_CHART_PATH/values.yaml
