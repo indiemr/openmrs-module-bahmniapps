@@ -8,80 +8,66 @@ on:
 
   workflow_dispatch:
 
+env:
+  AWS_REGION : "ap-south-1"
+
 jobs:
-  build-publish-docker-helm:
-    name: Build & Publish Docker Image & Helm Chart
+  build-publish-docker:
+    name: Build & Publish Docker Image
     runs-on: ubuntu-latest
-    env:
-      HELM_CHART_PATH: package/helm/
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v2
-      - name: Set env.ARTIFACT_VERSION
-        run: |
-          wget -q https://raw.githubusercontent.com/Bahmni/bahmni-infra-utils/main/setArtifactVersion.sh && chmod +x setArtifactVersion.sh
-          ./setArtifactVersion.sh
-          rm setArtifactVersion.sh
+      - uses: actions/checkout@v4
+
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ARN_ROLE_BASE }}/ecr-identity-provider-role
+          role-session-name: bahmniwebrolesession
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Use Node.js 10.16.3
         uses: actions/setup-node@v1
         with:
           node-version: 10.16.3
-      - name: Use Ruby 2.5
+
+      - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: 2.5
+          ruby-version: '2.7'
+
       - run: npm install -g bower
       - run: npm install -g grunt-cli
-      - run: gem install compass
+      - run: gem install compass -v 1.0.3
       - run: npm install --global yarn
+
       - name: Package
         run: cd ui && yarn cache clean && /bin/bash ./scripts/package.sh
+
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      - name: Login to DockerHub
-        uses: docker/login-action@v2 
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME_INDICLINIC }}
-          password: ${{ secrets.DOCKERHUB_TOKEN_INDICLINIC }}
-      - name: Docker Build and push
-        uses: docker/build-push-action@v3
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          file: package/docker/Dockerfile
-          push: true
-          tags: indiclinic/bahmni-web:${{ env.ARTIFACT_VERSION }}, indiclinic/bahmni-web:latest
-      # - name: Update Version and Image Tag
-      #   run: |
-      #     yq --inplace '.image.tag = "${{ env.ARTIFACT_VERSION }}"' $HELM_CHART_PATH/values.yaml
-      #     yq --inplace '.version = "${{ env.ARTIFACT_VERSION }}"' $HELM_CHART_PATH/Chart.yaml
-      # - name: Helm Lint
-      #   run: helm lint $HELM_CHART_PATH
+        uses: docker/setup-buildx-action@v3
 
-      # - name: Helm Package
-      #   run: helm package $HELM_CHART_PATH
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-      # - name: Checkout Charts Repository
-      #   uses: actions/checkout@v2
-      #   with:
-      #     repository: Bahmni/helm-charts
-      #     ref: gh-pages
-      #     path: helm-charts
-      #     persist-credentials: false
+      - name: Build, tag, and push docker image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: bahmni-web
+          GH_SHA: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          docker buildx create --use --name ghaBuilder
 
-      # - name: Copy Helm Archive
-      #   run: cp bahmni-web-${{ env.ARTIFACT_VERSION }}.tgz helm-charts/bahmni-web/
-
-      # - name: Helm Index
-      #   working-directory: helm-charts/
-      #   run: helm repo index --merge index.yaml --url https://bahmni.github.io/helm-charts/  .
-
-      # - name: Commit and Push Chart Repository
-      #   working-directory: helm-charts/
-      #   run: |
-      #     git config user.name ${{ secrets.BAHMNI_USERNAME}}
-      #     git config user.email ${{ secrets.BAHMNI_EMAIL}}
-      #     git add .
-      #     git commit -m "Release of bahmni-web-${{ env.ARTIFACT_VERSION }}"
-      #     git push 'https://${{ secrets.BAHMNI_USERNAME}}:${{ secrets.BAHMNI_PAT}}@github.com/bahmni/helm-charts.git' gh-pages
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            -t $REGISTRY/$REPOSITORY:latest \
+            -t $REGISTRY/$REPOSITORY:$GH_SHA \
+            -t $REGISTRY/$REPOSITORY:$RUN_NUMBER \
+            --push \
+            -f package/docker/Dockerfile .
